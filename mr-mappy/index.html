@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mr. Mappy: A Customizable D&D Map Generator</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f0f0f0;
+            padding: 20px;
+        }
+        .map-and-buttons {
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            width: 100%;
+            gap: 20px;
+        }
+        #map-container {
+            display: grid;
+            gap: 1px;
+            background-color: #ccc;
+            padding: 1px;
+            margin-bottom: 20px;
+            position: relative;
+        }
+        .tile {
+            width: 32px;
+            height: 32px;
+            border: 1px solid #999;
+            background-size: cover;
+            position: relative;
+        }
+        .encounter {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 24px;
+            height: 24px;
+            background-image: url('images/encounter_icon.png');
+            background-size: cover;
+            cursor: pointer;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            margin-bottom: 10px;
+        }
+        #controls, #terrain-probabilities {
+            display: none;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .btn-group {
+            display: flex;
+            flex-direction: column;
+        }
+        .btn-group button {
+            margin-bottom: 10px;
+        }
+        #legend {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+        }
+        .legend-sprite {
+            width: 32px;
+            height: 32px;
+            margin-right: 5px;
+            border: 1px solid #999;
+            background-size: cover;
+        }
+    </style>
+</head>
+<body>
+    <h1>Mr. Mappy</h1>
+    <label>
+        <input type="checkbox" id="toggle-controls" onchange="toggleControls()"> Show Advanced Options
+    </label>
+    <div id="controls">
+        <label for="mapSize">Map Size:</label>
+        <input type="number" id="mapSize" min="10" max="50" value="20">
+        
+        <label for="numTrails">Number of Trails:</label>
+        <input type="number" id="numTrails" min="0" max="5" value="1">
+        
+        <label for="minTrailLength">Min Trail Length:</label>
+        <input type="number" id="minTrailLength" min="0" max="20" value="20">
+        
+        <label for="maxTrailLength">Max Trail Length:</label>
+        <input type="number" id="maxTrailLength" min="0" max="20" value="20">
+    </div>
+    <div id="terrain-probabilities"></div>
+    
+    <div class="map-and-buttons">
+        <div id="map-container"></div>
+        <div class="btn-group">
+            <button onclick="generateMap()">Generate New Map</button>
+            <button onclick="saveMap()">Save Map</button>
+            <button onclick="loadMap()">Load Map</button>
+            <button onclick="downloadMap()">Download Map as PNG</button>
+            <label>
+                <input type="checkbox" id="toggle-multi-select" onclick="toggleMultiSelect()"> Multi-Select Mode
+            </label>
+            <br> 
+            <label for="terrainDropdown">Change Selected Tiles to:</label>
+            <select id="terrainDropdown" onchange="changeSelectedTilesTerrain()">
+                <option value="">Select terrain</option>
+                <!-- Dynamically generated terrain options -->
+            </select>
+        </div>
+    </div>
+    
+    <canvas id="mapCanvas" style="display: none;"></canvas>
+    <div id="legend"></div>
+    
+    <script>
+        // Constants
+        const TILE_SIZE = 32;
+        const MAX_MAP_SIZE = 50;
+        const MIN_MAP_SIZE = 10;
+        const MAX_TRAILS = 5;
+        const MIN_TRAIL_LENGTH = 0;
+        const MAX_TRAIL_LENGTH = 20;
+
+        // Tile and terrain definitions
+        const TILE_SPRITES = {
+            'grass': 'images/grass_sprite.png',
+            'forest': 'images/forest_sprite.png',
+            'rocky': 'images/rocky_sprite.png',
+            'water': 'images/water_sprite.png',
+            'trail': 'images/trail_sprite.png',
+            'structure': 'images/structure_sprite.png',
+            'encounter': 'images/encounter_icon.png'
+        };
+
+        const TERRAIN_TYPES = Object.keys(TILE_SPRITES);
+        let mapGrid = [];
+        let encounters = [];
+        let terrainProbabilities = {
+            'grass': 0.2,
+            'forest': 0.65,
+            'rocky': 0.1,
+            'water': 0.05
+        };
+
+        let multiSelectMode = false;
+        let selectedTiles = [];
+
+        // UI Control Functions
+        function toggleControls() {
+            const controls = document.getElementById('controls');
+            const terrainProbabilities = document.getElementById('terrain-probabilities');
+            const checkbox = document.getElementById('toggle-controls');
+            
+            const displayValue = checkbox.checked ? 'flex' : 'none';
+            controls.style.display = displayValue;
+            terrainProbabilities.style.display = displayValue;
+        }
+
+        function toggleMultiSelect() {
+            multiSelectMode = document.getElementById('toggle-multi-select').checked;
+            selectedTiles = [];  // Clear selection when toggling mode
+            renderMap();  // Update the map to reflect any changes
+        }
+
+        function createTerrainProbabilityInputs() {
+            const container = document.getElementById('terrain-probabilities');
+            container.innerHTML = '';
+            
+            TERRAIN_TYPES.forEach(terrain => {
+                const label = document.createElement('label');
+                label.textContent = `${terrain} probability:`;
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.min = '0';
+                input.max = '1';
+                input.step = '0.05';
+                input.value = terrainProbabilities[terrain];
+                input.id = `${terrain}-probability`;
+                container.appendChild(label);
+                container.appendChild(input);
+            });
+        }
+
+        function populateTerrainDropdown() {
+            const dropdown = document.getElementById('terrainDropdown');
+            TERRAIN_TYPES.forEach(terrain => {
+                const option = document.createElement('option');
+                option.value = terrain;
+                option.textContent = terrain.charAt(0).toUpperCase() + terrain.slice(1);
+                dropdown.appendChild(option);
+            });
+        }
+
+        // Validation Functions
+        function updateTerrainProbabilities() {
+            Object.keys(terrainProbabilities).forEach(terrain => {
+                terrainProbabilities[terrain] = parseFloat(document.getElementById(`${terrain}-probability`).value);
+            });
+            const total = Object.values(terrainProbabilities).reduce((sum, prob) => sum + prob, 0);
+            if (Math.abs(total - 1) > 0.01) {
+                alert("Terrain probabilities must sum to 1. Please adjust your values.");
+                return false;
+            }
+            return true;
+        }
+
+        function validateTrailLengths() {
+            const minLength = parseInt(document.getElementById('minTrailLength').value);
+            const maxLength = parseInt(document.getElementById('maxTrailLength').value);
+            if (minLength > maxLength) {
+                alert("Min Trail Length cannot exceed Max Trail Length.");
+                return false;
+            }
+            return true;
+        }
+
+        // Map Generation Logic
+        function generateMap() {
+            if (!updateTerrainProbabilities() || !validateTrailLengths()) return;
+
+            const mapSize = parseInt(document.getElementById('mapSize').value);
+            mapGrid = Array(mapSize).fill().map(() => Array(mapSize).fill('grass'));
+            encounters = [];
+
+            for (let y = 0; y < mapSize; y++) {
+                for (let x = 0; x < mapSize; x++) {
+                    const rand = Math.random();
+                    let cumulativeProbability = 0;
+                    for (const [terrain, probability] of Object.entries(terrainProbabilities)) {
+                        cumulativeProbability += probability;
+                        if (rand < cumulativeProbability) {
+                            mapGrid[y][x] = terrain;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            createTrails(mapSize);
+            renderMap();
+        }
+
+        function createTrails(mapSize) {
+            const numTrails = parseInt(document.getElementById('numTrails').value);
+            const minTrailLength = parseInt(document.getElementById('minTrailLength').value);
+            const maxTrailLength = parseInt(document.getElementById('maxTrailLength').value);
+            const startX = Math.floor(mapSize / 2);
+            const startY = mapSize - 1;
+
+            for (let i = 0; i < numTrails; i++) {
+                const direction = ['n', 'e', 'w'][Math.floor(Math.random() * 3)];
+                const length = minTrailLength + Math.floor(Math.random() * (maxTrailLength - minTrailLength + 1));
+                createTrail(startX, startY, length, direction);
+            }
+        }
+
+        function createTrail(x, y, length, direction) {
+            if (length <= 0 || x < 0 || x >= mapGrid.length || y < 0 || y >= mapGrid.length) return;
+
+            mapGrid[y][x] = 'trail';
+
+            const dirs = {
+                'n': [0, -1], 's': [0, 1], 'e': [1, 0], 'w': [-1, 0]
+            };
+
+            if (Math.random() < 0.2) {
+                const newDir = ['n', 'e', 'w'][Math.floor(Math.random() * 3)];
+                if (newDir !== direction) {
+                    createTrail(x + dirs[newDir][0], y + dirs[newDir][1], length - 1, newDir);
+                }
+            }
+            createTrail(x + dirs[direction][0], y + dirs[direction][1], length - 1, direction);
+        }
+
+        // Rendering Logic
+        function renderMap() {
+            const mapContainer = document.getElementById('map-container');
+            const canvas = document.getElementById('mapCanvas');
+            const context = canvas.getContext('2d');
+
+            canvas.width = mapGrid[0].length * TILE_SIZE;
+            canvas.height = mapGrid.length * TILE_SIZE;
+
+            context.clearRect(0, 0, canvas.width, canvas.height);
+
+            mapContainer.innerHTML = '';
+            mapContainer.style.gridTemplateColumns = `repeat(${mapGrid[0].length}, ${TILE_SIZE}px)`;
+            mapGrid.forEach((row, y) => {
+                row.forEach((tile, x) => {
+                    const tileElement = document.createElement('div');
+                    tileElement.className = 'tile';
+                    tileElement.style.backgroundImage = `url('${TILE_SPRITES[tile]}')`;
+
+                    // Highlight selected tiles with a border
+                    if (selectedTiles.some(tile => tile.x === x && tile.y === y)) {
+                        tileElement.style.border = '1px dashed red';  // Highlight selected tile
+                    }
+
+                    tileElement.onclick = () => {
+                        if (multiSelectMode) {
+                            toggleTileSelection(x, y);  // Select or deselect the tile
+                        } else {
+                            handleTileClick(x, y);
+                        }
+                    };
+
+                    mapContainer.appendChild(tileElement);
+
+                    // Draw on canvas for download
+                    const img = new Image();
+                    img.src = TILE_SPRITES[tile];
+                    img.onload = () => {
+                        context.drawImage(img, x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                    };
+                });
+            });
+
+            // Add encounters
+            addEncountersToMap();
+        }
+
+        function handleTileClick(x, y) {
+            if (mapGrid[y][x] === 'structure') {
+                mapGrid[y][x] = 'grass';  // Remove structure
+            } else if (['grass', 'trail', 'forest', 'rocky', 'water'].includes(mapGrid[y][x])) {
+                addPointOfInterest(x, y);
+            }
+            renderMap();
+        }
+
+        function addEncountersToMap() {
+            encounters.forEach(({ x, y }, index) => {
+                const encounterElement = document.createElement('div');
+                encounterElement.className = 'encounter';
+                encounterElement.onclick = () => {
+                    if (confirm(`Do you want to remove the encounter at (${x}, ${y})?`)) {
+                        encounters.splice(index, 1);  // Remove the encounter from the array
+                        renderMap();  // Re-render the map without the encounter
+                    }
+                };
+                const indexInMap = y * mapGrid[0].length + x;
+                mapContainer.children[indexInMap].appendChild(encounterElement);
+            });
+        }
+
+        function toggleTileSelection(x, y) {
+            const index = selectedTiles.findIndex(tile => tile.x === x && tile.y === y);
+            if (index > -1) {
+                selectedTiles.splice(index, 1);  // Deselect the tile
+            } else {
+                selectedTiles.push({ x, y });  // Select the tile
+            }
+            renderMap();  // Re-render to show selection
+        }
+
+        function changeSelectedTilesTerrain() {
+            const terrain = document.getElementById('terrainDropdown').value;
+            selectedTiles.forEach(({ x, y }) => {
+                mapGrid[y][x] = terrain;
+            });
+            selectedTiles = [];  // Clear the selection
+            renderMap();  // Re-render the map
+        }
+
+        function addPointOfInterest(x, y) {
+            if (x === undefined || y === undefined) {
+                alert("Click on the map to add a point of interest.");
+                return;
+            }
+            mapGrid[y][x] = 'structure';
+            renderMap();
+        }
+
+        // Save/Load Functions
+        function saveMap() {
+            localStorage.setItem('savedMap', JSON.stringify(mapGrid));
+            localStorage.setItem('savedEncounters', JSON.stringify(encounters));
+            alert('Map saved!');
+        }
+
+        function loadMap() {
+            const savedMap = localStorage.getItem('savedMap');
+            const savedEncounters = localStorage.getItem('savedEncounters');
+            if (savedMap && savedEncounters) {
+                mapGrid = JSON.parse(savedMap);
+                encounters = JSON.parse(savedEncounters);
+                renderMap();
+            } else {
+                alert('No saved map found!');
+            }
+        }
+
+        function downloadMap() {
+            const canvas = document.getElementById('mapCanvas');
+            const link = document.createElement('a');
+            link.download = 'map.png';
+            link.href = canvas.toDataURL();
+            link.click();
+        }
+        
+        // Initialize
+        createTerrainProbabilityInputs();
+        populateTerrainDropdown();
+        generateMap();  // Generate initial map
+    </script>
+</body>
+</html>
